@@ -1,0 +1,7 @@
+[project]
+name = "formal-xai-bounds"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []

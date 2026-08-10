@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 import numpy as np
+import csv
 
 import sys
 sys.path.append(".")
@@ -114,5 +115,5 @@ if __name__=="__main__":
         writer.writeheader()
         writer.writerows(results)
 
-    print(f"\nSuccessfully stored eps_min and eps_max results for {num_samples} indices in '{csv_filename}'.")
+    print(f"\nSuccessfully stored eps_min and eps_max results for {len(results)} indices in '{csv_filename}'.")
 

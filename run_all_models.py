@@ -223,7 +223,7 @@ def load_model_and_data(model_path, num_samples=10):
 # Experiment Runner
 # ============================================================================
 
-def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10):
+def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10, results_dir=None):
     """
     Run XAI bounds experiment for a single model.
 
@@ -232,6 +232,7 @@ def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10):
         k_sparse: Sparsity budget for Sparse-PGD
         eps_fav: FAVEX radius (upper bound for eps_min search)
         num_samples: Number of test samples to evaluate
+        results_dir: Custom results directory (default: results/{num_samples}_samples_k_{k_sparse})
     """
     # Load model and data
     model, images, labels = load_model_and_data(model_path, num_samples)
@@ -242,12 +243,20 @@ def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
+    # Create results directory
+    if results_dir is None:
+        results_dir = f"results/{num_samples}_samples_k_{k_sparse}"
+
+    results_path = Path(results_dir)
+    results_path.mkdir(parents=True, exist_ok=True)
+
     # Generate output filename
     model_name = Path(model_path).stem
-    csv_filename = f"eps_bounds_{model_name}.csv"
+    csv_filename = results_path / f"eps_bounds_{model_name}.csv"
 
     print(f"\nImage stats: max={images.max():.4f}, min={images.min():.4f}, mean={images.mean():.4f}")
-    print(f"Running experiment with k={k_sparse}, eps_fav={eps_fav}\n")
+    print(f"Running experiment with k={k_sparse}, eps_fav={eps_fav}")
+    print(f"Results will be saved to: {csv_filename}\n")
 
     results = []
 

@@ -122,21 +122,87 @@ def parse_model_filename(filename):
         raise ValueError(f"Unknown architecture in filename: {filename}")
 
 
-def create_model(model_info, dataset_config, device):
-    """Create model based on parsed filename info and dataset config."""
+def detect_num_classes_from_checkpoint(checkpoint, model_info):
+    """
+    Detect the number of output classes from checkpoint state_dict.
+
+    Args:
+        checkpoint: Loaded checkpoint (state_dict or dict containing state_dict)
+        model_info: Parsed model information
+
+    Returns:
+        int: Number of output classes
+    """
+    # Extract state_dict
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    # Handle DataParallel prefix
+    if list(state_dict.keys())[0].startswith("module."):
+        state_dict = {k[7:]: v for k, v in state_dict.items()}
+
+    # Find the final layer based on architecture
+    if model_info['arch'] == 'cnn3':
+        # For CNN3, last layer is the Linear layer (key: '7.weight' or similar)
+        # Find the largest numbered layer
+        final_layer_key = None
+        for key in state_dict.keys():
+            if 'weight' in key and key.split('.')[0].isdigit():
+                final_layer_key = key
+
+        if final_layer_key:
+            num_classes = state_dict[final_layer_key].shape[0]
+            return num_classes
+
+    elif model_info['arch'] == 'fc':
+        # For FC networks, last layer weight has shape (num_classes, hidden_dim)
+        # Find the largest numbered layer
+        max_layer_num = -1
+        for key in state_dict.keys():
+            if 'weight' in key:
+                parts = key.split('.')
+                if parts[0].isdigit():
+                    layer_num = int(parts[0])
+                    if layer_num > max_layer_num:
+                        max_layer_num = layer_num
+
+        if max_layer_num >= 0:
+            final_weight_key = f"{max_layer_num}.weight"
+            if final_weight_key in state_dict:
+                num_classes = state_dict[final_weight_key].shape[0]
+                return num_classes
+
+    # Fallback: return None if detection fails
+    return None
+
+
+def create_model(model_info, dataset_config, device, num_classes_override=None):
+    """
+    Create model based on parsed filename info and dataset config.
+
+    Args:
+        model_info: Parsed model information
+        dataset_config: Dataset configuration
+        device: Target device
+        num_classes_override: Override number of classes (for checkpoint mismatch)
+    """
+    num_classes = num_classes_override if num_classes_override is not None else dataset_config['num_classes']
+
     if model_info['arch'] == 'cnn3':
         model = cnn3(
             in_ch=dataset_config['in_channels'],
             in_dim=dataset_config['input_dim'],
             width=64,
-            num_class=dataset_config['num_classes']
+            num_class=num_classes
         )
     elif model_info['arch'] == 'fc':
         model = fc_network(
             input_dim=dataset_config['input_size'],
             hidden_dim=model_info['hidden_dim'],
             num_layers=model_info['num_layers'],
-            num_class=dataset_config['num_classes']
+            num_class=num_classes
         )
     else:
         raise ValueError(f"Unknown architecture: {model_info['arch']}")
@@ -177,11 +243,25 @@ def load_model_and_data(model_path, num_samples=10):
     if dataset_config is None:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
-    # Create model
-    model = create_model(model_info, dataset_config, device)
-
-    # Load model weights
+    # Load checkpoint first to detect number of classes
     checkpoint = torch.load(model_path, map_location=device)
+
+    # Detect actual number of classes from checkpoint
+    detected_num_classes = detect_num_classes_from_checkpoint(checkpoint, model_info)
+
+    if detected_num_classes is not None:
+        if detected_num_classes != dataset_config['num_classes']:
+            print(f"⚠️  Warning: Checkpoint has {detected_num_classes} classes, "
+                  f"but {dataset_name} config expects {dataset_config['num_classes']}")
+            print(f"   Using {detected_num_classes} classes from checkpoint")
+
+    # Create model with detected number of classes
+    model = create_model(
+        model_info,
+        dataset_config,
+        device,
+        num_classes_override=detected_num_classes
+    )
 
     # Extract state_dict
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -198,8 +278,32 @@ def load_model_and_data(model_path, num_samples=10):
 
     # Load dataset
     if dataset_name.lower() == 'gtsrb':
-        print(f"Warning: GTSRB dataset loading not implemented. Skipping {model_path}")
-        return None, None, None
+        print(f"⚠️  Warning: GTSRB dataset loader not implemented.")
+        print(f"   Creating synthetic test data for model evaluation only.")
+        print(f"   Note: This is for testing the model structure, not real GTSRB evaluation.")
+
+        # Create synthetic data matching GTSRB format
+        # Using detected number of classes from the model
+        actual_num_classes = detected_num_classes if detected_num_classes else dataset_config['num_classes']
+
+        # Generate random images (3 channels, 32x32)
+        images = torch.rand(num_samples, 3, 32, 32).to(device)
+
+        # Generate random labels within valid range
+        labels = torch.randint(0, actual_num_classes, (num_samples,)).to(device)
+
+        print(f"   Generated {num_samples} synthetic samples with {actual_num_classes} classes")
+
+        # Verify model can process the data
+        with torch.no_grad():
+            outputs = model(images)
+            predictions = torch.argmax(outputs, dim=1)
+
+        print(f"Synthetic Labels    : {labels.tolist()}")
+        print(f"Model Predictions   : {predictions.tolist()}")
+        print(f"Model output shape  : {outputs.shape}")
+
+        return model, images, labels
 
     test_dataset = dataset_config['loader']()
 

@@ -11,6 +11,7 @@ import numpy as np
 import csv
 import os
 import sys
+import pickle
 from pathlib import Path
 
 sys.path.append(".")
@@ -55,6 +56,62 @@ def fc_network(input_dim, hidden_dim, num_layers, num_class):
 # Dataset Configuration
 # ============================================================================
 
+def load_gtsrb_dataset():
+    """
+    Load GTSRB dataset from pickle file (10-class version from VeriX).
+
+    Based on: https://github.com/NeuralNetworkVerification/VeriX/blob/main/gtsrb.py
+
+    Returns:
+        TensorDataset: Test dataset with images and labels
+    """
+    gtsrb_pickle_path = 'data/GTSRB/gtsrb.pickle'
+
+    if not os.path.exists(gtsrb_pickle_path):
+        # Try alternative locations
+        alternative_paths = [
+            'models/gtsrb.pickle',
+            './gtsrb.pickle',
+            'data/gtsrb.pickle'
+        ]
+
+        for alt_path in alternative_paths:
+            if os.path.exists(alt_path):
+                gtsrb_pickle_path = alt_path
+                break
+        else:
+            raise FileNotFoundError(
+                f"GTSRB pickle file not found. Tried:\n"
+                f"  - data/GTSRB/gtsrb.pickle\n"
+                f"  - models/gtsrb.pickle\n"
+                f"  - ./gtsrb.pickle\n"
+                f"  - data/gtsrb.pickle\n"
+                f"\nPlease download from: https://github.com/NeuralNetworkVerification/VeriX"
+            )
+
+    print(f"Loading GTSRB from: {gtsrb_pickle_path}")
+
+    with open(gtsrb_pickle_path, 'rb') as handle:
+        gtsrb = pickle.load(handle)
+
+    # Extract test data (VeriX format)
+    # Images are in (N, H, W, C) format, need to transpose to (N, C, H, W)
+    x_test = np.transpose(gtsrb['x_test'], (0, 3, 1, 2))
+    y_test = gtsrb['y_test']
+
+    # Create TensorDataset (normalize to [0, 1])
+    test_dataset = torch.utils.data.TensorDataset(
+        torch.tensor(x_test, dtype=torch.float32) / 255.0,
+        torch.tensor(y_test, dtype=torch.long)
+    )
+
+    print(f"✓ GTSRB loaded: {len(test_dataset)} test samples")
+    print(f"  Image shape: {x_test.shape[1:]}")
+    print(f"  Num classes: {len(np.unique(y_test))}")
+
+    return test_dataset
+
+
 def get_dataset_config(dataset_name):
     """Get configuration for a specific dataset."""
     configs = {
@@ -79,11 +136,11 @@ def get_dataset_config(dataset_name):
             )
         },
         'gtsrb': {
-            'num_classes': 43,  # GTSRB has 43 classes
+            'num_classes': 43,  # GTSRB standard has 43 classes (but models may have 10)
             'in_channels': 3,
             'input_dim': 32,
             'input_size': 32 * 32 * 3,
-            'loader': lambda: None  # GTSRB needs custom loading
+            'loader': load_gtsrb_dataset  # Custom GTSRB loader from pickle
         }
     }
     return configs.get(dataset_name.lower())
@@ -278,32 +335,55 @@ def load_model_and_data(model_path, num_samples=10):
 
     # Load dataset
     if dataset_name.lower() == 'gtsrb':
-        print(f"⚠️  Warning: GTSRB dataset loader not implemented.")
-        print(f"   Creating synthetic test data for model evaluation only.")
-        print(f"   Note: This is for testing the model structure, not real GTSRB evaluation.")
+        try:
+            # Try to load real GTSRB data
+            test_dataset = dataset_config['loader']()
 
-        # Create synthetic data matching GTSRB format
-        # Using detected number of classes from the model
-        actual_num_classes = detected_num_classes if detected_num_classes else dataset_config['num_classes']
+            # Extract samples from dataset
+            actual_num_classes = detected_num_classes if detected_num_classes else dataset_config['num_classes']
 
-        # Generate random images (3 channels, 32x32)
-        images = torch.rand(num_samples, 3, 32, 32).to(device)
+            # Get indices for valid classes (if model has fewer classes than dataset)
+            all_images = []
+            all_labels = []
 
-        # Generate random labels within valid range
-        labels = torch.randint(0, actual_num_classes, (num_samples,)).to(device)
+            for img, label in test_dataset:
+                if label < actual_num_classes:  # Only use samples within model's class range
+                    all_images.append(img)
+                    all_labels.append(label)
+                    if len(all_images) >= num_samples:
+                        break
 
-        print(f"   Generated {num_samples} synthetic samples with {actual_num_classes} classes")
+            if len(all_images) < num_samples:
+                print(f"⚠️  Warning: Found only {len(all_images)} samples with labels < {actual_num_classes}")
+                print(f"   Requested {num_samples} samples")
 
-        # Verify model can process the data
-        with torch.no_grad():
-            outputs = model(images)
-            predictions = torch.argmax(outputs, dim=1)
+            # Stack tensors
+            images = torch.stack(all_images[:num_samples]).to(device)
+            labels = torch.tensor(all_labels[:num_samples], dtype=torch.long).to(device)
 
-        print(f"Synthetic Labels    : {labels.tolist()}")
-        print(f"Model Predictions   : {predictions.tolist()}")
-        print(f"Model output shape  : {outputs.shape}")
+            print(f"✓ Loaded {len(images)} real GTSRB samples (classes 0-{actual_num_classes-1})")
 
-        return model, images, labels
+        except FileNotFoundError as e:
+            # Fallback to synthetic data if pickle not found
+            print(f"⚠️  Warning: GTSRB pickle file not found.")
+            print(f"   {str(e)}")
+            print(f"   Falling back to synthetic test data for model evaluation only.")
+
+            actual_num_classes = detected_num_classes if detected_num_classes else dataset_config['num_classes']
+            images = torch.rand(num_samples, 3, 32, 32).to(device)
+            labels = torch.randint(0, actual_num_classes, (num_samples,)).to(device)
+
+            print(f"   Generated {num_samples} synthetic samples with {actual_num_classes} classes")
+
+            with torch.no_grad():
+                outputs = model(images)
+                predictions = torch.argmax(outputs, dim=1)
+
+            print(f"Synthetic Labels    : {labels.tolist()}")
+            print(f"Model Predictions   : {predictions.tolist()}")
+            print(f"Model output shape  : {outputs.shape}")
+
+            return model, images, labels
 
     test_dataset = dataset_config['loader']()
 

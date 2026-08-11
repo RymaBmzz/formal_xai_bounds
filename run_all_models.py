@@ -322,6 +322,56 @@ def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10, result
 
 def main():
     """Run experiments on all models in the models/ directory."""
+    import argparse
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Run XAI bounds experiments on all models',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python run_all_models.py                    # Default: k=50, num_samples=10
+  python run_all_models.py --k 100            # k=100, num_samples=10
+  python run_all_models.py --samples 20       # k=50, num_samples=20
+  python run_all_models.py --k 100 --samples 20  # k=100, num_samples=20
+
+Results will be saved to: results/{num_samples}_samples_k_{k_sparse}/
+        '''
+    )
+
+    parser.add_argument(
+        '--k', '--k-sparse',
+        type=int,
+        default=50,
+        dest='k_sparse',
+        help='Sparsity budget for Sparse-PGD attack (default: 50)'
+    )
+
+    parser.add_argument(
+        '--samples', '--num-samples',
+        type=int,
+        default=10,
+        dest='num_samples',
+        help='Number of test samples to evaluate (default: 10)'
+    )
+
+    parser.add_argument(
+        '--eps-fav',
+        type=float,
+        default=0.25,
+        help='FAVEX radius / upper bound for eps_min search (default: 0.25)'
+    )
+
+    args = parser.parse_args()
+
+    # Validate arguments
+    if args.k_sparse < 1:
+        parser.error("k_sparse must be at least 1")
+    if args.num_samples < 1:
+        parser.error("num_samples must be at least 1")
+    if args.eps_fav <= 0 or args.eps_fav > 1:
+        parser.error("eps_fav must be between 0 and 1")
+
     models_dir = Path("./models")
     model_files = sorted(models_dir.glob("*.pt"))
 
@@ -332,6 +382,8 @@ def main():
     print(f"\n{'#'*70}")
     print(f"# XAI Bounds Experiment Suite")
     print(f"# Found {len(model_files)} models to evaluate")
+    print(f"# Parameters: k={args.k_sparse}, num_samples={args.num_samples}, eps_fav={args.eps_fav}")
+    print(f"# Results directory: results/{args.num_samples}_samples_k_{args.k_sparse}/")
     print(f"{'#'*70}")
 
     for i, model_path in enumerate(model_files, 1):
@@ -342,9 +394,9 @@ def main():
         try:
             run_experiment(
                 model_path=str(model_path),
-                k_sparse=50,
-                eps_fav=0.25,
-                num_samples=10
+                k_sparse=args.k_sparse,
+                eps_fav=args.eps_fav,
+                num_samples=args.num_samples
             )
         except Exception as e:
             print(f"\n❌ Error processing {model_path.name}: {e}")
@@ -355,6 +407,7 @@ def main():
 
     print(f"\n{'#'*70}")
     print(f"# All experiments complete!")
+    print(f"# Results saved to: results/{args.num_samples}_samples_k_{args.k_sparse}/")
     print(f"{'#'*70}\n")
 
 

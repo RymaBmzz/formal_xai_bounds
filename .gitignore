@@ -47,4 +47,9 @@ results/**/*.csv
 Thumbs.db
 
 # Logs
+logs/
 *.log
+!logs/.gitkeep
+
+*.txt
+*.md

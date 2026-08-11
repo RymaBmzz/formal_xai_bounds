@@ -23,9 +23,13 @@ env/
 data/
 datasets/
 
-# Results
-*.csv
+# Results (only ignore CSVs in root directory)
+/*.csv
 !.gitkeep
+
+# Keep results directory structure but ignore CSVs
+results/**/*.csv
+!results/**/summary_*.csv
 
 # Jupyter
 .ipynb_checkpoints/

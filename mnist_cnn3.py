@@ -5,6 +5,7 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 import numpy as np
 import csv
+from pathlib import Path
 
 import sys
 sys.path.append(".")
@@ -79,15 +80,21 @@ if __name__=="__main__":
 
     model, images, labels = get_model_and_data()
     print(images.max(), images.min(), images.mean())
-    csv_filename = "eps_bounds_mnist_cnn3.csv"
+
+    # Setup results directory
+    num_samples = 10
+    k_sparse = 50
+    results_dir = Path(f"results/{num_samples}_samples_k_{k_sparse}")
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_filename = results_dir / "eps_bounds_cnn3_mnist.csv"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
-    k_sparse = 50
     results = []
     eps_fav = 0.25 # favex radius
 
-    for index in range(10): # the 10 samples used in favex
+    for index in range(num_samples): # the samples used in favex
         y_label = labels[index:index+1]  # Shape: (1,)
         image = images[index:index+1].to(device)  # Shape: (1, C, H, W)
         label = y_label.to(device)  # Shape: (1,)
@@ -115,5 +122,6 @@ if __name__=="__main__":
         writer.writeheader()
         writer.writerows(results)
 
-    print(f"\nSuccessfully stored eps_min and eps_max results for {len(results)} indices in '{csv_filename}'.")
+    print(f"\n✓ Successfully stored eps_min and eps_max results for {len(results)} indices in '{csv_filename}'.")
+    print(f"✓ Results saved to: {results_dir}/")
 

@@ -10,24 +10,51 @@ from pathlib import Path
 import sys
 
 
-def load_all_results():
-    """Load all CSV result files."""
+def load_all_results(results_dir=None):
+    """
+    Load all CSV result files.
+
+    Args:
+        results_dir: Directory to search for results (default: search current dir and results/)
+
+    Returns:
+        dict: {model_name: DataFrame} or None if no results found
+    """
     results = {}
-    csv_files = list(Path(".").glob("eps_bounds_*.csv"))
+
+    if results_dir:
+        # Search in specific directory
+        search_paths = [Path(results_dir)]
+    else:
+        # Search in current directory and results/ subdirectories
+        search_paths = [Path(".")]
+        results_root = Path("results")
+        if results_root.exists():
+            search_paths.extend(results_root.glob("*_samples_k_*"))
+
+    csv_files = []
+    for search_path in search_paths:
+        csv_files.extend(search_path.glob("eps_bounds_*.csv"))
 
     if not csv_files:
-        print("No result files found. Run experiments first with: ./run.sh all")
+        print("No result files found.")
+        print("\nSearched in:")
+        for path in search_paths:
+            print(f"  - {path}")
+        print("\nRun experiments first with: ./run.sh all")
         return None
 
+    print(f"\nFound {len(csv_files)} result files:")
     for csv_file in sorted(csv_files):
         model_name = csv_file.stem.replace("eps_bounds_", "")
         try:
             df = pd.read_csv(csv_file)
             results[model_name] = df
+            print(f"  ✓ {csv_file.relative_to('.')}")
         except Exception as e:
-            print(f"Warning: Could not load {csv_file}: {e}")
+            print(f"  ✗ Warning: Could not load {csv_file}: {e}")
 
-    return results
+    return results if results else None
 
 
 def print_summary_table(results):
@@ -165,25 +192,42 @@ def print_dataset_comparison(results):
     print("="*90)
 
 
-def export_summary(summary_df, output_file="summary_all_models.csv"):
-    """Export summary to CSV."""
-    summary_df.to_csv(output_file, index=False)
-    print(f"\n✓ Summary exported to: {output_file}")
+def export_summary(summary_df, results_dir=None, output_file="summary_all_models.csv"):
+    """
+    Export summary to CSV.
+
+    Args:
+        summary_df: Summary DataFrame
+        results_dir: Results directory to save to (default: current directory)
+        output_file: Output filename
+    """
+    if results_dir:
+        output_path = Path(results_dir) / output_file
+    else:
+        output_path = Path(output_file)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_df.to_csv(output_path, index=False)
+    print(f"\n✓ Summary exported to: {output_path}")
 
 
 def main():
     """Main comparison function."""
+    # Parse command line arguments
+    results_dir = sys.argv[1] if len(sys.argv) > 1 else None
+
     print("\n" + "#"*90)
     print("# XAI Bounds - Results Comparison")
     print("#"*90)
 
+    if results_dir:
+        print(f"\nSearching in: {results_dir}")
+
     # Load all results
-    results = load_all_results()
+    results = load_all_results(results_dir)
 
     if not results:
         sys.exit(1)
-
-    print(f"\nFound {len(results)} result files")
 
     # Print comparisons
     summary_df = print_summary_table(results)
@@ -192,7 +236,7 @@ def main():
     print_dataset_comparison(results)
 
     # Export summary
-    export_summary(summary_df)
+    export_summary(summary_df, results_dir)
 
     print("\n" + "#"*90)
     print("# Comparison Complete")

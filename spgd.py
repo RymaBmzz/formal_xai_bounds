@@ -82,7 +82,7 @@ class MaskingB(torch.autograd.Function):
 
 class SparsePGD(object):
     def __init__(self, model, epsilon=255 / 255, k=10, t=30, random_start=True, patience=3, classes=10, alpha=0.25,
-                 beta=0.25, unprojected_gradient=True):
+                 beta=0.25, unprojected_gradient=True, data_min=None, data_max=None):
         self.model = model
         self.epsilon = epsilon
         self.k = k
@@ -94,6 +94,9 @@ class SparsePGD(object):
         self.classes = classes
         self.masking = MaskingA() if unprojected_gradient else MaskingB()
         self.weight_decay = 0.0
+        # Data bounds for normalized inputs (default [0, 1] for unnormalized)
+        self.data_min = data_min if data_min is not None else 0.0
+        self.data_max = data_max if data_max is not None else 1.0
 
     def initial_perturb(self, x, seed=-1):
         if self.random_start:
@@ -102,13 +105,15 @@ class SparsePGD(object):
             perturb = x.new(x.size()).uniform_(-self.epsilon, self.epsilon)
         else:
             perturb = x.new(x.size()).zero_()
-        perturb = torch.min(torch.max(perturb, -x), 1 - x)
+        # Clamp perturbation to keep x + perturb within [data_min, data_max]
+        perturb = torch.min(torch.max(perturb, self.data_min - x), self.data_max - x)
         return perturb
 
     def update_perturbation(self, perturb, grad, perturb_old, x, it):
         perturb1 = perturb + self.alpha * grad.sign()
         perturb1 = perturb1.clamp_(-self.epsilon, self.epsilon)
-        perturb1 = torch.min(torch.max(perturb1, -x), 1 - x)
+        # Clamp perturbation to keep x + perturb within [data_min, data_max]
+        perturb1 = torch.min(torch.max(perturb1, self.data_min - x), self.data_max - x)
         return perturb1, perturb_old
 
 
@@ -181,8 +186,12 @@ class SparsePGD(object):
         proj_perturb = self.masking.apply(perturb, F.sigmoid(mask), self.k)
         with torch.no_grad():
             assert torch.norm(proj_perturb.sum(1), p=0, dim=(1, 2)).max().item() <= self.k, 'projection error'
-            assert torch.max(x + proj_perturb).item() <= 1.0 and torch.min(x + proj_perturb).item() >= 0.0, 'perturbation exceeds bound, min={}, max={}'.format(torch.min(x + proj_perturb).item(),
-            torch.max(x + proj_perturb).item())
+            # Use data_min/data_max for bounds checking (handles normalized data)
+            data_max_val = self.data_max.max().item() if isinstance(self.data_max, torch.Tensor) else self.data_max
+            data_min_val = self.data_min.min().item() if isinstance(self.data_min, torch.Tensor) else self.data_min
+            assert torch.max(x + proj_perturb).item() <= data_max_val and torch.min(x + proj_perturb).item() >= data_min_val, \
+                'perturbation exceeds bound, min={}, max={}, expected [{}, {}]'.format(
+                    torch.min(x + proj_perturb).item(), torch.max(x + proj_perturb).item(), data_min_val, data_max_val)
         logits = self.model(x + proj_perturb)
 
         if targeted:

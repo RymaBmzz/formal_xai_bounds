@@ -120,6 +120,8 @@ def get_dataset_config(dataset_name):
             'in_channels': 1,
             'input_dim': 28,
             'input_size': 28 * 28,
+            'mean': torch.tensor([0.0]),
+            'std': torch.tensor([1.0]),
             'loader': lambda: datasets.MNIST(
                 root="./data", train=False, download=True,
                 transform=transforms.Compose([transforms.ToTensor()])
@@ -130,6 +132,8 @@ def get_dataset_config(dataset_name):
             'in_channels': 3,
             'input_dim': 32,
             'input_size': 32 * 32 * 3,
+            'mean': torch.tensor([0.4914, 0.4822, 0.4465]),
+            'std': torch.tensor([0.2023, 0.1994, 0.2010]),
             'loader': lambda: datasets.CIFAR10(
                 root="./data", train=False, download=True,
                 transform=transforms.Compose([
@@ -146,10 +150,22 @@ def get_dataset_config(dataset_name):
             'in_channels': 3,
             'input_dim': 32,
             'input_size': 32 * 32 * 3,
+            'mean': torch.tensor([0.0, 0.0, 0.0]),
+            'std': torch.tensor([1.0, 1.0, 1.0]),
             'loader': load_gtsrb_dataset  # Custom GTSRB loader from pickle
         }
     }
-    return configs.get(dataset_name.lower())
+
+    config = configs.get(dataset_name.lower())
+    if config:
+        # Calculate data bounds based on normalization: (pixel_value - mean) / std
+        # For pixel values in [0, 1]:
+        mean = config['mean']
+        std = config['std']
+        config['data_min'] = ((0.0 - mean) / std).reshape(1, -1, 1, 1)
+        config['data_max'] = ((1.0 - mean) / std).reshape(1, -1, 1, 1)
+
+    return config
 
 
 # ============================================================================
@@ -286,7 +302,7 @@ def load_model_and_data(model_path, num_samples=10):
         num_samples: Number of test samples to load
 
     Returns:
-        model, images, labels
+        model, images, labels, dataset_config
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -389,7 +405,7 @@ def load_model_and_data(model_path, num_samples=10):
             print(f"Model Predictions   : {predictions.tolist()}")
             print(f"Model output shape  : {outputs.shape}")
 
-            return model, images, labels
+            return model, images, labels, dataset_config
 
     test_dataset = dataset_config['loader']()
 
@@ -406,7 +422,7 @@ def load_model_and_data(model_path, num_samples=10):
     print(f"Model Predictions   : {predictions.tolist()}")
     print(f"Accuracy on samples : {(predictions == labels).sum().item()}/{num_samples}")
 
-    return model, images, labels
+    return model, images, labels, dataset_config
 
 
 # ============================================================================
@@ -425,7 +441,7 @@ def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10, result
         results_dir: Custom results directory (default: results/{num_samples}_samples_k_{k_sparse})
     """
     # Load model and data
-    model, images, labels = load_model_and_data(model_path, num_samples)
+    model, images, labels, dataset_config = load_model_and_data(model_path, num_samples)
 
     if model is None:
         return  # Skip if dataset not supported
@@ -470,7 +486,9 @@ def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10, result
             model, image, label,
             k=k_sparse,
             eps_low=eps_fav,
-            eps_high=1.0
+            eps_high=1.0,
+            data_min=dataset_config['data_min'].to(device),
+            data_max=dataset_config['data_max'].to(device)
         )
         print(f"✓ eps_max = {eps_max:.4f}")
 

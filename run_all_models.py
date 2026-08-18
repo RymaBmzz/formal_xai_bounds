@@ -112,6 +112,69 @@ def load_gtsrb_dataset():
     return test_dataset
 
 
+def get_model_epsilon(model_path):
+    """
+    Get dataset-specific and architecture-specific epsilon value.
+
+    Args:
+        model_path: Path to model file (e.g., "models/cnn3_mnist.pt")
+
+    Returns:
+        float: Appropriate epsilon value for this model
+    """
+    model_info = parse_model_filename(model_path)
+    dataset = model_info['dataset'].lower()
+    arch = model_info['arch']
+
+    # MNIST epsilon values
+    if dataset == 'mnist':
+        if arch == 'fc':
+            hidden_dim = model_info.get('hidden_dim', 10)
+            if hidden_dim == 10:
+                return 0.1  # FC-10x2
+            elif hidden_dim == 50:
+                return 0.2  # FC-50x2
+            else:
+                return 0.25  # Default for other FC architectures
+        elif arch == 'cnn3':
+            return 0.25  # CNN-3
+        elif arch == 'cnn7':
+            return 0.25  # CNN-7
+        else:
+            return 0.25  # Default MNIST
+
+    # GTSRB epsilon values
+    elif dataset == 'gtsrb':
+        if arch == 'fc':
+            hidden_dim = model_info.get('hidden_dim', 10)
+            if hidden_dim == 10:
+                return 0.05  # FC-10x2
+            elif hidden_dim == 50:
+                return 0.1   # FC-50x2
+            else:
+                return 0.1   # Default for other FC architectures
+        else:
+            return 0.1  # Default GTSRB
+
+    # CIFAR-10 epsilon values
+    elif dataset == 'cifar10':
+        if arch == 'fc':
+            hidden_dim = model_info.get('hidden_dim', 50)
+            if hidden_dim == 50:
+                return 2/255  # FC-50x2: ~0.0078
+            else:
+                return 8/255  # Default for other FC
+        elif arch == 'cnn3':
+            return 8/255   # CNN-3: ~0.0314
+        elif arch == 'cnn7':
+            return 16/255  # CNN-7: ~0.0627
+        else:
+            return 8/255   # Default CIFAR-10
+
+    # Fallback default
+    return 0.25
+
+
 def get_dataset_config(dataset_name):
     """Get configuration for a specific dataset."""
     configs = {
@@ -429,17 +492,23 @@ def load_model_and_data(model_path, num_samples=10):
 # Experiment Runner
 # ============================================================================
 
-def run_experiment(model_path, k_sparse=50, eps_fav=0.25, num_samples=10, results_dir=None):
+def run_experiment(model_path, k_sparse=50, eps_fav=None, num_samples=10, results_dir=None):
     """
     Run XAI bounds experiment for a single model.
 
     Args:
         model_path: Path to model file
         k_sparse: Sparsity budget for Sparse-PGD
-        eps_fav: FAVEX radius (upper bound for eps_min search)
+        eps_fav: FAVEX radius (upper bound for eps_min search).
+                 If None, automatically determined from model architecture and dataset.
         num_samples: Number of test samples to evaluate
         results_dir: Custom results directory (default: results/{num_samples}_samples_k_{k_sparse})
     """
+    # Auto-determine epsilon if not provided
+    if eps_fav is None:
+        eps_fav = get_model_epsilon(model_path)
+        print(f"Auto-detected eps_fav = {eps_fav:.6f} for {os.path.basename(model_path)}")
+
     # Load model and data
     model, images, labels, dataset_config = load_model_and_data(model_path, num_samples)
 

@@ -233,8 +233,12 @@ class SparsePGD(object):
             # proj_perturb = self.masking.apply(perturb, mask, self.k)
             with torch.no_grad():
                 assert torch.norm(proj_perturb.sum(1), p=0, dim=(1, 2)).max().item() <= self.k, 'projection error'
-                assert torch.max(x + proj_perturb).item() <= 1.0 and torch.min(x + proj_perturb).item() >= 0.0, 'perturbation exceeds bound, min={}, max={}'.format(torch.min(x + proj_perturb).item(),
-            torch.max(x + proj_perturb).item())
+                # Use data_min/data_max for bounds checking (handles normalized data)
+                data_max_val = self.data_max.max().item() if isinstance(self.data_max, torch.Tensor) else self.data_max
+                data_min_val = self.data_min.min().item() if isinstance(self.data_min, torch.Tensor) else self.data_min
+                assert torch.max(x + proj_perturb).item() <= data_max_val and torch.min(x + proj_perturb).item() >= data_min_val, \
+                    'perturbation exceeds bound, min={}, max={}, expected [{}, {}]'.format(
+                        torch.min(x + proj_perturb).item(), torch.max(x + proj_perturb).item(), data_min_val, data_max_val)
             logits = self.model(x + proj_perturb)
 
             if targeted:

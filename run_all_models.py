@@ -132,7 +132,13 @@ def get_dataset_config(dataset_name):
             'input_size': 32 * 32 * 3,
             'loader': lambda: datasets.CIFAR10(
                 root="./data", train=False, download=True,
-                transform=transforms.Compose([transforms.ToTensor()])
+                transform=transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.4914, 0.4822, 0.4465],
+                        std=[0.2023, 0.1994, 0.2010]
+                    )
+                ])
             )
         },
         'gtsrb': {

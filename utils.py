@@ -125,16 +125,13 @@ def run_single_sparse_pgd(model, image, label, k=100, eps=0.3, steps=100):
 import torch
 
 def find_smallest_eps_spgd(
-    model, image, label, k=100, eps_low=0.0, eps_high=1.0, tol=1e-3, steps=100,
-    data_min=None, data_max=None
+    model, image, label, k=100, eps_low=0.0, eps_high=1.0, tol=1e-3, steps=100
 ):
     """
     Uses a dichotomy approach (binary search) to find the minimum epsilon
     perturbation bound required for SparsePGD to successfully flip the model's prediction.
 
-    Args:
-        data_min: Minimum valid pixel value (for normalized data)
-        data_max: Maximum valid pixel value (for normalized data)
+    Works in [0,1] input space. Model handles normalization internally.
     """
     model.eval()
 
@@ -143,12 +140,6 @@ def find_smallest_eps_spgd(
         image = image.unsqueeze(0)
     if label.dim() == 0:
         label = label.unsqueeze(0)
-
-    # Set default data bounds if not provided
-    if data_min is None:
-        data_min = 0.0
-    if data_max is None:
-        data_max = 1.0
 
     # 1. Initial check: if image is already misclassified, eps = 0
     with torch.no_grad():
@@ -177,9 +168,7 @@ def find_smallest_eps_spgd(
             patience=5,
             alpha=0.05,
             beta=0.1,
-            unprojected_gradient=True,
-            data_min=data_min,
-            data_max=data_max
+            unprojected_gradient=True
         )
 
         perturb, mask, _, _ = spgd(image, label, targeted=False)
@@ -188,8 +177,8 @@ def find_smallest_eps_spgd(
         with torch.no_grad():
             proj_perturb = spgd.masking.apply(perturb, torch.sigmoid(mask), k)
             proj_perturb = torch.clamp(proj_perturb, min=-mid, max=mid)
-            # Clamp to valid data range (handles normalized data)
-            x_adv = torch.clamp(image + proj_perturb, min=data_min, max=data_max).detach()
+            # Clamp to [0, 1] range
+            x_adv = torch.clamp(image + proj_perturb, min=0.0, max=1.0).detach()
 
             adv_pred = model(x_adv).argmax(dim=1).item()
             success = (adv_pred != label.item())

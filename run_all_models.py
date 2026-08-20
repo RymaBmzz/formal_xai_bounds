@@ -19,6 +19,36 @@ from utils import get_eps_min, find_smallest_eps_spgd
 
 
 # ============================================================================
+# Normalization Wrapper
+# ============================================================================
+
+class NormalizedModel(nn.Module):
+    """
+    Wrapper that applies normalization before passing to the model.
+    This makes the model work in [0,1] input space while internally
+    using normalized features.
+    """
+    def __init__(self, model, mean=None, std=None):
+        super().__init__()
+        self.model = model
+
+        # Default: no normalization (mean=0, std=1)
+        if mean is None:
+            mean = torch.zeros(1)
+        if std is None:
+            std = torch.ones(1)
+
+        # Register as buffers (not parameters, but part of state_dict)
+        self.register_buffer('mean', mean.view(1, -1, 1, 1))
+        self.register_buffer('std', std.view(1, -1, 1, 1))
+
+    def forward(self, x):
+        # Normalize: (x - mean) / std
+        x_normalized = (x - self.mean) / self.std
+        return self.model(x_normalized)
+
+
+# ============================================================================
 # Model Architecture Definitions
 # ============================================================================
 
@@ -176,7 +206,13 @@ def get_model_epsilon(model_path):
 
 
 def get_dataset_config(dataset_name):
-    """Get configuration for a specific dataset."""
+    """
+    Get configuration for a specific dataset.
+
+    Note: Normalization is NOT applied in data loading.
+    Images are in [0, 1] range after ToTensor().
+    Normalization is handled by NormalizedModel wrapper.
+    """
     configs = {
         'mnist': {
             'num_classes': 10,
@@ -199,13 +235,7 @@ def get_dataset_config(dataset_name):
             'std': torch.tensor([0.2023, 0.1994, 0.2010]),
             'loader': lambda: datasets.CIFAR10(
                 root="./data", train=False, download=True,
-                transform=transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        mean=[0.4914, 0.4822, 0.4465],
-                        std=[0.2023, 0.1994, 0.2010]
-                    )
-                ])
+                transform=transforms.Compose([transforms.ToTensor()])  # No normalization here
             )
         },
         'gtsrb': {
@@ -219,16 +249,7 @@ def get_dataset_config(dataset_name):
         }
     }
 
-    config = configs.get(dataset_name.lower())
-    if config:
-        # Calculate data bounds based on normalization: (pixel_value - mean) / std
-        # For pixel values in [0, 1]:
-        mean = config['mean']
-        std = config['std']
-        config['data_min'] = ((0.0 - mean) / std).reshape(1, -1, 1, 1)
-        config['data_max'] = ((1.0 - mean) / std).reshape(1, -1, 1, 1)
-
-    return config
+    return configs.get(dataset_name.lower())
 
 
 # ============================================================================
@@ -324,6 +345,10 @@ def create_model(model_info, dataset_config, device, num_classes_override=None):
     """
     Create model based on parsed filename info and dataset config.
 
+    The model is wrapped with NormalizedModel to handle dataset-specific
+    normalization internally. Attacks work in [0,1] space, and the model
+    applies normalization in its forward pass.
+
     Args:
         model_info: Parsed model information
         dataset_config: Dataset configuration
@@ -333,14 +358,14 @@ def create_model(model_info, dataset_config, device, num_classes_override=None):
     num_classes = num_classes_override if num_classes_override is not None else dataset_config['num_classes']
 
     if model_info['arch'] == 'cnn3':
-        model = cnn3(
+        base_model = cnn3(
             in_ch=dataset_config['in_channels'],
             in_dim=dataset_config['input_dim'],
             width=64,
             num_class=num_classes
         )
     elif model_info['arch'] == 'fc':
-        model = fc_network(
+        base_model = fc_network(
             input_dim=dataset_config['input_size'],
             hidden_dim=model_info['hidden_dim'],
             num_layers=model_info['num_layers'],
@@ -349,7 +374,15 @@ def create_model(model_info, dataset_config, device, num_classes_override=None):
     else:
         raise ValueError(f"Unknown architecture: {model_info['arch']}")
 
-    return model.to(device)
+    # Wrap with normalization layer
+    # Mean and std are moved to device inside NormalizedModel
+    normalized_model = NormalizedModel(
+        base_model,
+        mean=dataset_config['mean'],
+        std=dataset_config['std']
+    )
+
+    return normalized_model.to(device)
 
 
 # ============================================================================
@@ -555,9 +588,7 @@ def run_experiment(model_path, k_sparse=50, eps_fav=None, num_samples=10, result
             model, image, label,
             k=k_sparse,
             eps_low=eps_fav,
-            eps_high=1.0,
-            data_min=dataset_config['data_min'].to(device),
-            data_max=dataset_config['data_max'].to(device)
+            eps_high=1.0
         )
         print(f"✓ eps_max = {eps_max:.4f}")
 

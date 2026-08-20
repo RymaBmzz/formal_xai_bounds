@@ -341,6 +341,40 @@ def detect_num_classes_from_checkpoint(checkpoint, model_info):
     return None
 
 
+def create_base_model(model_info, dataset_config, num_classes_override=None):
+    """
+    Create base model (without normalization wrapper).
+
+    Args:
+        model_info: Parsed model information
+        dataset_config: Dataset configuration
+        num_classes_override: Override number of classes (for checkpoint mismatch)
+
+    Returns:
+        Base model (nn.Sequential or nn.Module)
+    """
+    num_classes = num_classes_override if num_classes_override is not None else dataset_config['num_classes']
+
+    if model_info['arch'] == 'cnn3':
+        model = cnn3(
+            in_ch=dataset_config['in_channels'],
+            in_dim=dataset_config['input_dim'],
+            width=64,
+            num_class=num_classes
+        )
+    elif model_info['arch'] == 'fc':
+        model = fc_network(
+            input_dim=dataset_config['input_size'],
+            hidden_dim=model_info['hidden_dim'],
+            num_layers=model_info['num_layers'],
+            num_class=num_classes
+        )
+    else:
+        raise ValueError(f"Unknown architecture: {model_info['arch']}")
+
+    return model
+
+
 def create_model(model_info, dataset_config, device, num_classes_override=None):
     """
     Create model based on parsed filename info and dataset config.
@@ -355,24 +389,8 @@ def create_model(model_info, dataset_config, device, num_classes_override=None):
         device: Target device
         num_classes_override: Override number of classes (for checkpoint mismatch)
     """
-    num_classes = num_classes_override if num_classes_override is not None else dataset_config['num_classes']
-
-    if model_info['arch'] == 'cnn3':
-        base_model = cnn3(
-            in_ch=dataset_config['in_channels'],
-            in_dim=dataset_config['input_dim'],
-            width=64,
-            num_class=num_classes
-        )
-    elif model_info['arch'] == 'fc':
-        base_model = fc_network(
-            input_dim=dataset_config['input_size'],
-            hidden_dim=model_info['hidden_dim'],
-            num_layers=model_info['num_layers'],
-            num_class=num_classes
-        )
-    else:
-        raise ValueError(f"Unknown architecture: {model_info['arch']}")
+    # Create base model
+    base_model = create_base_model(model_info, dataset_config, num_classes_override)
 
     # Wrap with normalization layer
     # Mean and std are moved to device inside NormalizedModel
@@ -430,11 +448,10 @@ def load_model_and_data(model_path, num_samples=10):
                   f"but {dataset_name} config expects {dataset_config['num_classes']}")
             print(f"   Using {detected_num_classes} classes from checkpoint")
 
-    # Create model with detected number of classes
-    model = create_model(
+    # Create BASE model (without wrapper) to load checkpoint
+    base_model = create_base_model(
         model_info,
         dataset_config,
-        device,
         num_classes_override=detected_num_classes
     )
 
@@ -448,7 +465,17 @@ def load_model_and_data(model_path, num_samples=10):
     if list(state_dict.keys())[0].startswith("module."):
         state_dict = {k[7:]: v for k, v in state_dict.items()}
 
-    model.load_state_dict(state_dict)
+    # Load weights into base model
+    base_model.load_state_dict(state_dict)
+    base_model.eval()
+
+    # NOW wrap with normalization layer
+    model = NormalizedModel(
+        base_model,
+        mean=dataset_config['mean'],
+        std=dataset_config['std']
+    ).to(device)
+
     model.eval()
 
     # Load dataset

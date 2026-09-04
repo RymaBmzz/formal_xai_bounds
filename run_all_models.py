@@ -19,6 +19,16 @@ from utils import get_eps_min, find_smallest_eps_spgd
 
 
 # ============================================================================
+# Compatibility Modules
+# ============================================================================
+
+class ELFlatten(nn.Module):
+    """Flatten module compatible with CNN-7 checkpoints from expressive losses."""
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+
+# ============================================================================
 # Normalization Wrapper
 # ============================================================================
 
@@ -63,6 +73,38 @@ def cnn3(in_ch=1, in_dim=28, width=64, num_class=10):
         nn.ReLU(),
         nn.Flatten(),
         nn.Linear((in_dim // 4) ** 2 * 2 * width, num_class),
+    )
+    return model
+
+
+def cnn7(in_ch=3, in_dim=32, width=64, linear_size=512, num_class=10):
+    """
+    CNN7 architecture from Expressive Losses paper.
+
+    Architecture from: https://openreview.net/pdf?id=mzyZ4wzKlM
+    Used in FAVEX for MNIST and CIFAR-10.
+    """
+    model = nn.Sequential(
+        nn.Conv2d(in_ch, width, 3, stride=1, padding=1),
+        nn.BatchNorm2d(width),
+        nn.ReLU(),
+        nn.Conv2d(width, width, 3, stride=1, padding=1),
+        nn.BatchNorm2d(width),
+        nn.ReLU(),
+        nn.Conv2d(width, 2 * width, 3, stride=2, padding=1),
+        nn.BatchNorm2d(2 * width),
+        nn.ReLU(),
+        nn.Conv2d(2 * width, 2 * width, 3, stride=1, padding=1),
+        nn.BatchNorm2d(2 * width),
+        nn.ReLU(),
+        nn.Conv2d(2 * width, 2 * width, 3, stride=1, padding=1),
+        nn.BatchNorm2d(2 * width),
+        nn.ReLU(),
+        ELFlatten(),
+        nn.Linear((in_dim//2) * (in_dim//2) * 2 * width, linear_size),
+        nn.BatchNorm1d(linear_size),
+        nn.ReLU(),
+        nn.Linear(linear_size, num_class)
     )
     return model
 
@@ -262,6 +304,7 @@ def parse_model_filename(filename):
 
     Examples:
         - cnn3_mnist.pt -> (arch='cnn3', dataset='mnist')
+        - cnn7_cifar10.pt -> (arch='cnn7', dataset='cifar10')
         - fc_50x2_cifar10.pt -> (arch='fc', hidden=50, layers=2, dataset='cifar10')
     """
     name = Path(filename).stem  # Remove .pt extension
@@ -270,6 +313,11 @@ def parse_model_filename(filename):
     if parts[0] == 'cnn3':
         return {
             'arch': 'cnn3',
+            'dataset': parts[1],
+        }
+    elif parts[0] == 'cnn7':
+        return {
+            'arch': 'cnn7',
             'dataset': parts[1],
         }
     elif parts[0] == 'fc':
@@ -360,6 +408,14 @@ def create_base_model(model_info, dataset_config, num_classes_override=None):
             in_ch=dataset_config['in_channels'],
             in_dim=dataset_config['input_dim'],
             width=64,
+            num_class=num_classes
+        )
+    elif model_info['arch'] == 'cnn7':
+        model = cnn7(
+            in_ch=dataset_config['in_channels'],
+            in_dim=dataset_config['input_dim'],
+            width=64,
+            linear_size=512,
             num_class=num_classes
         )
     elif model_info['arch'] == 'fc':
